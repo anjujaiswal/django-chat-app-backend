@@ -51,9 +51,9 @@ def get_user_id_from_tokens(refresh_token, access_token):
         return None
     
 
-def genUUID():
-    uuid = uuid.uuid4()
-    return uuid
+# def genUUID():
+#     uuid = uuid.uuid4()
+#     return uuid
 
 def api_key_authorization(request):
     api_key_secret = request.headers.get('X-API-KEY')
