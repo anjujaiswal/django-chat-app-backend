@@ -43,7 +43,12 @@ class BlockListSerializer(serializers.ModelSerializer):
         model = BlockList
         fields = '__all__'
 
-class ChatsSerializer(serializers.ModelSerializer):
+class BlockingSerializer(serializers.ModelSerializer): #use this serializer in blocking api
+    class Meta:
+        model = BlockList
+        fields = '__all__'
+
+class RoomSerializer(serializers.ModelSerializer):
     class Meta:
         model =  Room
         fields = '__all__'

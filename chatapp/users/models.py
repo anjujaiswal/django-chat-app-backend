@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.contrib.postgres.fields import ArrayField
 from phonenumber_field.modelfields import PhoneNumberField
 from django.contrib.auth.models import AbstractBaseUser
 
@@ -23,7 +24,11 @@ ROOM_TYPE =[
 LAST_MSG_TYPE = [
     ("text","text"),
     ("image","image"),
-    ("video","video")
+    ("video","video"),
+    ("location", "location"),
+    ("contact","contact"),
+    ("document","document"),
+    ("None",None)
 ]
 # DEVICE = [
 #     ("ios","ios"),
@@ -121,10 +126,11 @@ class Room(models.Model):
     group_name = models.CharField(max_length=100, null=True, blank=True)
     group_picture = models.FileField(upload_to="uploads/", null=True, blank=True)
     group_quotes = models.TextField(null= True, blank=True)
-    last_msg_sender_id = models.ForeignKey(User, on_delete= models.CASCADE, db_column='last_msg_sender_id')
-    last_msg_sent_by = models.CharField(max_length=100)
-    last_msg = models.TextField()
-    last_msg_type = models.CharField(max_length=50, choices=LAST_MSG_TYPE, default="text")
+    is_archived = models.CharField(max_length=150, choices=TYPE, default="off")
+    last_msg_sender_id = models.ForeignKey(User, on_delete= models.CASCADE, db_column='last_msg_sender_id',blank=True, null=True)
+    last_msg_sent_by = models.CharField(max_length=100,blank=True, null=True)
+    last_msg = models.TextField(null=True, blank=True)
+    last_msg_type = models.CharField(max_length=50, choices=LAST_MSG_TYPE, null=True, blank=True)#default nhi hai bcs of null
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -139,10 +145,11 @@ class GroupMembers(models.Model):
     '''
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     room_id = models.ForeignKey(Room, on_delete= models.CASCADE, db_column ='room_id')
-    member_id = models.ForeignKey(User, on_delete=models.CASCADE, db_column = 'member_id')
-    group_picture = models.FileField(upload_to="uploads/", null=True, blank=True)
+    member_id = models.ForeignKey(User, on_delete=models.CASCADE, related_name='member',db_column = 'member_id')
+    username = models.CharField(max_length=150, blank=True,null=True)
+    profile_picture = models.FileField(upload_to="uploads/", null=True, blank=True)
     is_admin = models.CharField(max_length=50,choices=TYPE, default ="off")
-    # removed_by = models.ForeignKey(User)
+    removed_by = models.ForeignKey(User, on_delete=models.CASCADE,related_name='removed', db_column = 'removed_by', blank=True, null=True)
     is_deleted = models.CharField(max_length=50, choices=TYPE, default= "off")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
@@ -152,19 +159,22 @@ class GroupMembers(models.Model):
         db_table = 'group_members'
         ordering = ['-created_at']
 
-# class Messages(models.Model):
-#     '''
-#     records of message
-#     '''
-#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-#     room_id = models.ForeignKey(Room, on_delete= models.CASCADE, db_column ='room_id')
-#     sender_id = models.ForeignKey(User, on_delete= models.CASCADE, db_column='user_id')
-#     message_type = models.CharField(choices=Status.choices, default =  Status.SENT)
-#     file_path = models.FileField(upload_to="uploads/", null=True, blank=True)
-#     created_at = models.DateTimeField(auto_now_add=True)
-#     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
-#     deleted_at = models.DateTimeField(null=True, blank=True)
+class Messages(models.Model):
+    '''
+    records of message
+    '''
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    room_id = models.ForeignKey(Room, on_delete= models.CASCADE, db_column ='room_id')
+    sender_id = models.ForeignKey(User, on_delete= models.CASCADE, db_column='user_id')
+    message_type = models.CharField(max_length=50, choices=LAST_MSG_TYPE, null=True, blank=True)#default nhi hai bcs of null
+    file_path = models.FileField(upload_to="uploads/", null=True, blank=True)
+    thumbnail_file_path = models.FileField(upload_to="uploads/", null=True, blank=True)
+    delivered_to_users = ArrayField(models.UUIDField(default=uuid.uuid4), null=True, blank=True) 
+    read_by_users = ArrayField(models.UUIDField(default=uuid.uuid4), null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     
-#     class Meta:
-#         db_table = 'messages'
-#         ordering = ['-created_at']
+    class Meta:
+        db_table = 'messages'
+        ordering = ['-created_at']

@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from .models import User, Session, ContactList, Privacy,BlockList
-from .serializers import UserSerializer, RegisteSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, BlockListSerializer, ContactListSyncSerializer
+from .serializers import UserSerializer, RegisteSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, BlockListSerializer, ContactListSyncSerializer,BlockingSerializer
 import json
 from rest_framework import status
 from utils.helpers import json_response, get_tokens_for_user, get_user_id_from_tokens, ApiKey, api_key_authorization,token_authorization
@@ -26,6 +26,8 @@ class GetContactList(APIView):
             user_obj = request.user
             # search_key = request.GET.get('search_key',None)
             search = request.GET.get('search',None)
+            limit = request.GET.get('limit',100)
+            page = request.GET.get('page',1)
             # print(search)
             # print(search_key, search_value)
             # contact_objs  = ContactList.objects.filter(user_id = user_id)
@@ -36,9 +38,11 @@ class GetContactList(APIView):
                     Q(phone_number__icontains=search) |
                     Q(contact_name__icontains=search)
                 )
-
+            paginator = Paginator(contact_objs, limit)
+            page_obj = paginator.get_page(page)
             # ContactList.objects.filter(Q(phone_number__icontains=search) | Q(contact_name__icontains = search))
-            serializer = ContactListSerializer(contact_objs, many=True)
+            # serializer = ContactListSerializer(contact_objs, many=True)
+            serializer = ContactListSerializer(page_obj, many=True)
             # print(contact_objs)
             return json_response(result= serializer.data)
 
@@ -190,16 +194,24 @@ class BlockUser(APIView):
             user_obj = request.user
            
             to_user_id = payload.get('to_user_id', None)
+            # print(to_user_id)
             if to_user_id is None:
                 return json_response(success=False,
+                                    status_code=status.HTTP_400_BAD_REQUEST,
                                     message= 'SEND_THE_TO_USER_ID',
                                     )
+            if to_user_id == str(user_id):
+                return json_response(success=False,
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    message='You cannot block yourself')
             block_data = {
-                'to_user_id' : to_user_id,
-                'from_user_id' : user_id
+                "to_user_id" : to_user_id,
+                "from_user_id" : user_id
             }
             try:
                 contact_obj = ContactList.objects.get(contact_user_id = User(id = to_user_id))
+                # contact_obj = ContactList.objects.get(contact_user_id = to_user_id)
+            
             except ContactList.DoesNotExist:
                 return json_response(success= False,
                                     message='Invite User',
@@ -207,7 +219,8 @@ class BlockUser(APIView):
                               )
             serialized_data = ''
             try: 
-                block_obj = BlockList.objects.get(from_user_id = user_id, to_user_id= to_user_id)#
+                # block_obj = BlockList.objects.get(from_user_id = str(user_id), to_user_id= to_user_id)#
+                block_obj = BlockList.objects.get(from_user_id = str(user_id), to_user_id= to_user_id)
                 if block_obj:
                     # print("ene")
                     block_obj.delete()
@@ -215,16 +228,18 @@ class BlockUser(APIView):
                                     message='User is unblocked',
                                     status_code=status.HTTP_400_BAD_REQUEST)
             except:
-                serializer_block = BlockListSerializer(data = block_data)
+                serializer_block = BlockingSerializer(data = block_data)
+                print(serializer_block)
                 if serializer_block.is_valid():
                     serializer_block.save()
                     serialized_data = serializer_block.data
                 else:
                     return json_response(success=False,
                                     status_code=status.HTTP_400_BAD_REQUEST, 
-                                    message='User is UnBlocked', error= serializer_block.errors)
+                                    message='User is not Blocked', error= serializer_block.errors)
             # print(serializer_block.data)
-            return json_response(result= serialized_data, message='User blocked')
+            return json_response(result= serialized_data, message='User blocked',
+                                status_code=status.HTTP_201_CREATED)
            
         except Exception as err:
             return json_response(success = False,
