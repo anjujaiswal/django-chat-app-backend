@@ -19,7 +19,6 @@ urlpatterns = [
 #-----------------contacts-----------------------------    
     # path('contactsync/', contacts.ContactSync.as_view()),
     path('contactsync/', contacts.ContactSyncser.as_view()),
-    # path('contactUpdate/',contacts.ContactUpdate.as_view()),
     path('contactUpdate/',contacts.ContactUpdate.as_view()),
     path('contactlist/', contacts.GetContactList.as_view()),
 
@@ -32,7 +31,9 @@ urlpatterns = [
     path('blockDetails/', contacts.BlockDetails.as_view()),
 
 #-------------------chatroom apis---------------------------
-    path('addgroup/', chatroom.AddGroup.as_view())
+    path('addgroup/', chatroom.AddGroup.as_view()),
+    path('admin/', chatroom.GiveAdminRights.as_view()),
+    path('remove/', chatroom.RemoveMember.as_view()),
     
     # path('list', views.UserApi.as_view()),
 ]

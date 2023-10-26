@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, ContactList, Session, Privacy, BlockList, Room, GroupMembers #, Messages #Users
+from .models import User,UsersMapping,UserStatus, ContactList, Session, Privacy, BlockList, Room, GroupMembers #, Messages #Users
 from phonenumber_field.modelfields import PhoneNumberField
 
 class UserSerializer(serializers.ModelSerializer):
@@ -7,11 +7,39 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         # fields = '__all__'
-        exclude = ('password','last_login')
+        # fields = ['user_id','username','phone_number','profile_picture']
+        fields = ['user_id','username','phone_number','profile_picture']
+        # exclude = ('password','last_login')
+
+class UsersMappingSerializer(serializers.ModelSerializer):
+    '''serializer for UsersMapping'''
+   
+    class Meta:
+        model = UsersMapping
+        fields = '__all__'
+
+class UserStatusSerializer(serializers.ModelSerializer):
+    '''
+    serializer for user status 
+    '''
+    class Meta:
+        model = UserStatus
+        fields = '__all__'
+
+#this serializer is useful in making getcontactlist api if to add details of the users
+class UsersMappingcontactSerializer(serializers.ModelSerializer):
+    '''serializer for UsersMapping'''
+    app_user_id = UserSerializer()
+    class Meta:
+        model = UsersMapping
+        fields = '__all__'
 
 class ContactListSerializer(serializers.ModelSerializer):
-    """serializer for contactlist model"""
-    contact_user_id = UserSerializer() ###for showing user details as well
+    """
+    serializer for contactlist model to include the information of users (used in get contactlist api)
+    """
+    # contact_user_id = UserSerializer() ###for showing user details as well
+    contact_chat_user_id = UsersMappingcontactSerializer()
     class Meta:
         model = ContactList
         fields = '__all__'
@@ -36,19 +64,27 @@ class PrivacySerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class BlockListSerializer(serializers.ModelSerializer):
-    # to_user = UserSerializer(source='to_user_id', read_only=True)####to add user details to_user se ayega
-    to_user_id = UserSerializer( read_only=True)####to add user details to_user_id se ayega
+    # to_user = UserSerializer(source='to_user_id', read_only=True)####to add user details
+    to_chat_user_id = UsersMappingcontactSerializer( read_only=True)####to add user details to_chat_user_id  
     
     class Meta:
         model = BlockList
         fields = '__all__'
 
-class ChatsSerializer(serializers.ModelSerializer):
+class BlockingSerializer(serializers.ModelSerializer): #use this serializer in blocking api
+    '''serializer of block model'''
+    class Meta:
+        model = BlockList
+        fields = '__all__'
+
+class RoomSerializer(serializers.ModelSerializer):
+    '''serializer of room model'''
     class Meta:
         model =  Room
         fields = '__all__'
 
 class GroupMembersSerializer(serializers.ModelSerializer):
+    '''serializer of group member model'''
     class Meta:
         model =  GroupMembers
         fields = '__all__'
@@ -59,15 +95,15 @@ class GroupMembersSerializer(serializers.ModelSerializer):
 #         fields = '__all__'
 
 
-class RegisteSerializer(serializers.ModelSerializer):
+class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id','username','phone_number','profile_picture','status_quotes']
-        def create(self, validated_data):
-            """
-            Create and return a new `User` instance, given the validated data.
-            """
-            return User.objects.create(**validated_data)
+        fields = ['user_id','username','phone_number','profile_picture']
+        # def create(self, validated_data):
+        #     """
+        #     Create and return a new `User` instance, given the validated data.
+        #     """
+        #     return User.objects.create(**validated_data)
         
 
 class LoginSerializer(serializers.ModelSerializer):
@@ -79,6 +115,4 @@ class LoginSerializer(serializers.ModelSerializer):
         #     Create and return a new `User` instance, given the validated data.
         #     """
         #     return Session.objects.create(**validated_data)
-        
-        
         

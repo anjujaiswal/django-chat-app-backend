@@ -1,13 +1,14 @@
 from django.shortcuts import render
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from .models import User, Session, ContactList, Privacy
-from .serializers import UserSerializer, RegisteSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, SessionSerializer
+from .models import User,UserStatus, Session, ContactList, Privacy,UsersMapping
+from .serializers import UserSerializer,UserStatusSerializer, RegisterSerializer,UsersMappingSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, SessionSerializer
 import json
 from rest_framework import status
 from utils.helpers import json_response, get_tokens_for_user, get_user_id_from_tokens, ApiKey, api_key_authorization,token_authorization
 
-
+from phonenumber_field.modelfields import PhoneNumberField
+import traceback
 from decouple import config
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -16,11 +17,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 # Create your views here.
 from rest_framework.views import APIView
-
+import datetime
 
 class AddUser(APIView):
     '''
-    Api user does not exits first register(with default privacy settings)
+    Api user does not exits first register(with default user status)  add a entry in usermapping table 
     '''
     permission_classes = [ApiKey]
     
@@ -38,17 +39,21 @@ class AddUser(APIView):
                                     message='PHONE_NUMBER IS MISSING')
         
             flag = 0
+            usermapping_flag = 0
             user_data = {
                     'username' : username,
                     'phone_number': phone_number,
                     'profile_picture': payload.get('profile_picture', None),
-                    'status_quotes' : payload.get('status_quotes', None),
-                }
-            serializer_register = RegisteSerializer(data=user_data)
+                    }
+            # serializer_register = RegisterSerializer(data=user_data)
+            serializer_register = UserSerializer(data=user_data)
             try:
-                user_obj = User.objects.get(phone_number=phone_number)
+                user_obj = User.objects.get(phone_number = phone_number)
+                print(user_obj)
+                # return 
 
             except User.DoesNotExist:
+                #creating the row in user table
                 if serializer_register.is_valid():
                     # print(1,"kkkk")
                     flag = 1
@@ -60,20 +65,51 @@ class AddUser(APIView):
                                 error=serializer_register.errors)
             
             user_obj = User.objects.get(phone_number=phone_number)
-            serialzed_data = RegisteSerializer(user_obj)
-
+            # serialzed_data = RegisterSerializer(user_obj)
+            serialzed_data = UserSerializer(user_obj)
+            # print(user_obj.user_id, serialzed_data.data,"==============")
+            #for first time user we create the row for usermapping table
             if flag:
-                privacy_data = { "user_id": user_obj.id }
-                serializer_privacy = PrivacySerializer(data=privacy_data)
-
-                if serializer_privacy.is_valid():
-                    # print("privacy")
-                    serializer_privacy.save()
+                usersmapping_data = { "app_user_id": user_obj.user_id}
+                # usersmapping_data = { "app_user_id": user_obj.id}
+                serializer_usermapping = UsersMappingSerializer(data = usersmapping_data)
+                if serializer_usermapping.is_valid():
+                    #creating the row in usersmapping table
+                    usermapping_flag = 1
+                    serializer_usermapping.save()
                 else:
-                    json_response(success=False,
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                message='Privacy is not set', 
-                                error= serializer_privacy.errors)
+                    print(serializer_usermapping.errors)
+                    return json_response(success=False,
+                                         status_code=status.HTTP_400_BAD_REQUEST,
+                                         message='Users mapping is not created ',
+                                         error = serializer_usermapping.errors
+                                         )
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_obj.user_id)
+                if usermapping_flag:
+                    user_status_data = {
+                        "chat_user_id": usermapping_obj.chat_user_id,
+                        "timestamp": datetime.datetime.now()
+                        }
+                    serializer_userstatus = UserStatusSerializer(data = user_status_data)
+                    if serializer_userstatus.is_valid():
+                        serializer_userstatus.save()
+                    else:
+                        print(serializer_userstatus.errors)
+                        return json_response(success=False,
+                                             status_code=status.HTTP_400_BAD_REQUEST,
+                                             message='User status not created',
+                                             error = serializer_userstatus.errors)
+                # privacy_data = { "user_id": user_obj.id }
+                # serializer_privacy = PrivacySerializer(data=privacy_data)
+
+                # if serializer_privacy.is_valid():
+                #     # print("privacy")
+                #     serializer_privacy.save()
+                # else:
+                #     json_response(success=False,
+                #                 status_code=status.HTTP_400_BAD_REQUEST,
+                #                 message='Privacy is not set', 
+                #                 error= serializer_privacy.errors)
            
             
             return json_response(success=True, 
@@ -88,9 +124,10 @@ class AddUser(APIView):
                                     result = {},
                                     error = str(err))
         
+
 class VerifyOtp(APIView):
     '''
-    api for creating the session of the user
+    api for creating the session of the user via verifying bypass otp
     '''
     permission_classes = [ApiKey]
     def post(self,request):
@@ -100,18 +137,20 @@ class VerifyOtp(APIView):
             device_token = payload.get('device_token', None)
             device_type = payload.get('device_type', None)
             otp = payload.get('otp', config('OTP'))
-            id = payload.get('id', None)
-
-            if id is None or device_id is None or device_token is None or device_type is None:
+            # id = payload.get('id', None)
+           
+            phone_number = payload.get('phone_number', None)
+            
+            if phone_number is None or device_id is None or device_token is None or device_type is None:
                 return json_response(success = False, 
                                     status_code=status.HTTP_400_BAD_REQUEST,
                                     message='PROVIDE_DETAILS')
             
-            user_obj = User.objects.get(id = id)
-            token = get_tokens_for_user(user_obj)
             
+            user_obj = User.objects.get(phone_number=phone_number)
+            token = get_tokens_for_user(user_obj)
             session_data = {
-                'user_id': id,
+                'user_id': user_obj.user_id,
                 'device_id':  device_id, 
                 'device_token': device_token, 
                 'device_type':   device_type,
@@ -119,6 +158,7 @@ class VerifyOtp(APIView):
             }
             try:
                 # session_obj = Session.objects.get(user_id = user_obj.id, device_id = device_id)
+                #if device_id already exists 
                 session_obj = Session.objects.get( device_id = device_id)
                 
                 serializer_session = SessionSerializer(instance=session_obj,data=session_data,partial=True)
@@ -132,6 +172,7 @@ class VerifyOtp(APIView):
                                     error= serializer_session.errors)
 
             except Session.DoesNotExist:
+                #if session does not exist then create one
                 # serializer_login = LoginSerializer(data=session_data)
                 serializer_session = SessionSerializer(data=session_data)
                 if serializer_session.is_valid():
@@ -145,32 +186,39 @@ class VerifyOtp(APIView):
             return json_response(success=True,
                                 status_code=status.HTTP_201_CREATED,
                                 message='Session created',
-                                result={'sesion_details':serializer_session.data, 'token': token})
+                                result={'sesion_details':serializer_session.data ,'token': token})
 
         except Exception as err:
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
             return json_response(success = False,
                                     status_code = status.HTTP_400_BAD_REQUEST,
                                     message = 'SOMETHING_WENT_WRONG',
                                     result = {},
                                     error = str(err))
 
+
 class Update(APIView):
+    '''
+    api to update user  
+    '''
     # authentication_classes = [JWTAuthentication]
     permission_classes = [ApiKey, IsAuthenticated]
     def put(self, request):
         try:
             data = request.data
-            id = request.user.id
-            
-            user_obj = User.objects.get(id=id)
+            user_id = request.user.user_id
+            user_obj = request.user
+            # user_obj = User.objects.get(user_id = user_id)
 
             user_data = {
                     'username' : data.get('username', None),
                     'profile_picture': data.get('profile_picture', None),
-                    'status_quotes' : data.get('status_quotes', None),
+                   
                     }
             #user-active thing does not updated via profile update
-            serializer_user = RegisteSerializer(instance=user_obj,data=user_data, partial= True)
+            serializer_user = RegisterSerializer(instance=user_obj,data=user_data, partial= True)
             if serializer_user.is_valid():
                 serializer_user.save()
             
@@ -185,6 +233,7 @@ class Update(APIView):
                                     message = 'SOMETHING_WENT_WRONG',
                                     result = {},
                                     error = str(err))
+        
 class UserDetail(APIView):
     '''
     APi for getting particular user details
@@ -195,8 +244,8 @@ class UserDetail(APIView):
         try:
             payload = request.data
             user_obj = request.user
-            id = request.user.id
-            if id is not None:
+            user_id = request.user.user_id
+            if user_id is not None:
                 try:
                     # user_obj = User.objects.get(id=id)
                     serializer =  UserSerializer(user_obj)
@@ -218,55 +267,7 @@ class UserDetail(APIView):
                                     result = {},
                                     error = str(err))
 
-# class ContactSync(APIView):
-#     '''
-#     Api for contactSync
-#     '''
-#     permission_classes = [ApiKey, IsAuthenticated ]
-#     def post(self, request):
-#         try:
-#             user_id = request.user.id  # Get the user_id from the authentication token
-#             data = request.data
-#             contact_data = data.get('contacts',[])
-#             # print(contact_data)
-#             user_obj = request.user
-#             # # print(user_obj)
-#             # # Create a list of ContactList objects with user_id and contact_data
-#             contact_list_objects = []
-#             # contact_list_objects = [
-                
-#             #     {
-#             #         "user_id": user_id,
-#             #         "contact_name": item['contact_name'],
-#             #         "phone_number": item['phone_number']
-#             #     }
-#             #     for item in contact_data
-#             # ]
-#             for item in contact_data:
-#                 print(user_id)
-#                 dict = {
-#                     "user_id": user_id,
-#                     "contact_name": item.get('contact_name'),
-#                     "phone_number": item.get('phone_number')
-#                 }
-#                 print(dict)
-#                 contact_list_objects.append(dict)
 
-#             print((contact_list_objects))
-            
-#             serializer = ContactListSerializer(data=contact_list_objects, many=True)
-#             # print(serializer.errors)
-#             if serializer.is_valid():
-#                 print("ff")
-#                 serializer.save()
-        
-#             return json_response(success=True, status_code=status.HTTP_201_CREATED,message='')
-#         except Exception as err:
-#             return json_response(success = False,
-#                                     status_code = status.HTTP_400_BAD_REQUEST,
-#                                     message = 'SOMETHING_WENT_WRONG',
-#                                     result = {},
-#                                     error = str(err))
 class PrivacyGet(APIView):
     '''
         Api for getting the privacy settings of particular user
@@ -274,21 +275,42 @@ class PrivacyGet(APIView):
     permission_classes = [ApiKey, IsAuthenticated ]
     def get(self, request):
         try:
-            user_id = request.user.id
+            user_id = request.user.user_id
+            # print("xxxxx",user_id)
+            usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
+            chat_user_id = usermapping_obj.chat_user_id
+            serializer = None
+            privacy_obj = None
             try:
-                privacy_obj = Privacy.objects.get(user_id=user_id)
-            except:
-                return json_response(success=False, 
+                privacy_obj = Privacy.objects.get(chat_user_id = chat_user_id )
+                # print('cc',privacy_obj)
+            except Privacy.DoesNotExist:
+                # print("cccc")
+                privacy_data = {"chat_user_id": chat_user_id}
+                serializer = PrivacySerializer(data = privacy_data)
+                if serializer.is_valid():
+                    # print("@@@@@")
+                    serializer.save()
+                    return json_response(success=True,
+                                         status_code=status.HTTP_201_CREATED,
+                                         result=serializer.data,
+                                         message='Privacy settings data')
+                else:
+                    return json_response(success=False, 
                                     status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Privacy setting for that user not found')
+                                    error=serializer.errors)
             
             serializer =  PrivacySerializer(privacy_obj)
-            return json_response(success=True, 
-                                status_code=status.HTTP_200_OK,
-                                message='Privacy setting',
-                                result = serializer.data)
+            return json_response(success=True,
+                                         status_code=status.HTTP_201_CREATED,
+                                         result=serializer.data,
+                                         message='Privacy settings data')
         
         except Exception as err:
+            # print("----------------------------------------------------")
+            # traceback.print_exc()
+            # print("----------------------------------------------------")
+            
             return json_response(success = False,
                                     status_code = status.HTTP_400_BAD_REQUEST,
                                     message = 'SOMETHING_WENT_WRONG',
@@ -303,16 +325,18 @@ class PrivacyUpdate(APIView):
     def put(self, request):
         
         try:
-            data = request.data
-            user_id = request.user.id
+            payload = request.data
+            user_id = request.user.user_id
+            usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
+            chat_user_id = usermapping_obj.chat_user_id
             try:
-                privacy_obj = Privacy.objects.get(user_id=user_id)
+                privacy_obj = Privacy.objects.get(chat_user_id = chat_user_id)
             except:
                 return json_response(success=False,
                                     status_code=status.HTTP_400_BAD_REQUEST,
                                     message='Privacy setting for that user not found')
            
-            serializer = PrivacySerializer(instance=privacy_obj,data=data,partial=True)
+            serializer = PrivacySerializer(instance=privacy_obj,data= payload,partial=True)
             if serializer.is_valid():
                 serializer.save()
             else:
@@ -328,6 +352,55 @@ class PrivacyUpdate(APIView):
                                     message = 'SOMETHING_WENT_WRONG',
                                     result = {},
                                     error = str(err))
+        
+
+
+
+class RefreshTokenApi(APIView):
+    '''
+        Api collection for creating a new access token,refresh token
+        using the refresh token
+    '''
+    permission_classes = [ApiKey, IsAuthenticated]
+    def post(self, request):
+        '''
+            Post api to send a new access token
+        '''
+        try:
+        
+            payload = request.data
+            refresh_token = payload.get("refresh", None)
+           
+            if refresh_token is None:
+                return json_response(success = False,
+                                         status_code = status.HTTP_400_BAD_REQUEST,
+                                         message = "Provide refresh token.",
+                                         result = {},
+                                        )
+            refresh_token_object = RefreshToken(refresh_token)
+            access_token = refresh_token_object.access_token
+            return json_response(success = True,
+                                     status_code = status.HTTP_200_OK,
+                                     message = "New access token provided.",
+                                     result = {"refresh": str(refresh_token),
+                                               "access": str(access_token)},
+                                     )
+        
+        except Exception as err:
+            return json_response(success = False,
+                                    status_code = status.HTTP_400_BAD_REQUEST,
+                                    message = 'SOMETHING_WENT_WRONG',
+                                    result = {},
+                                    error = str(err))
+
+
+
+
+
+
+
+
+
 class Logout(APIView):
     '''
         Api for Logout collect user_id, device_id and remove that particular session
@@ -367,53 +440,6 @@ class Logout(APIView):
                                     message = 'SOMETHING_WENT_WRONG',
                                     result = {},
                                     error = str(err))
-
-class RefreshTokenApi(APIView):
-    '''
-        Api collection for creating a new access token
-        using the refresh token
-    '''
-    permission_classes = [ApiKey, IsAuthenticated]
-    def post(self, request):
-        '''
-            Post api to send a new access token
-        '''
-        try:
-        
-            data = request.data
-            refresh_token = data.get("refresh", None)
-           
-            if refresh_token is None:
-                return json_response(success = False,
-                                         status_code = status.HTTP_400_BAD_REQUEST,
-                                         message = "Provide refresh token.",
-                                         result = {},
-                                        )
-            refresh_token_object = RefreshToken(refresh_token)
-            access_token = refresh_token_object.access_token
-            return json_response(success = True,
-                                     status_code = status.HTTP_200_OK,
-                                     message = "New access token provided.",
-                                     result = {"refresh": str(refresh_token),
-                                               "access": str(access_token)},
-                                     )
-        
-        except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
-                                    result = {},
-                                    error = str(err))
-
-
-
-
-
-
-
-
-
-
 
 
 # class Register(GenericAPIView):

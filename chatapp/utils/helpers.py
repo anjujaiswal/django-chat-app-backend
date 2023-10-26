@@ -20,10 +20,12 @@ def json_response(success=True, status_code=status.HTTP_200_OK, message='', resu
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
+    # print("refresh: ", refresh)
 
     return {
         'refresh': str(refresh),
         'access': str(refresh.access_token),
+
     }
 
 from rest_framework.permissions import BasePermission
@@ -51,9 +53,9 @@ def get_user_id_from_tokens(refresh_token, access_token):
         return None
     
 
-# def genUUID():
-#     uuid = uuid.uuid4()
-#     return uuid
+def genUUID():
+    uuid = uuid.uuid4()
+    return uuid
 
 def api_key_authorization(request):
     api_key_secret = request.headers.get('X-API-KEY')
