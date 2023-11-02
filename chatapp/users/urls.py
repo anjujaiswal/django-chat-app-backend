@@ -1,3 +1,4 @@
+
 from django.urls import path,include
 from users import views, chatroom, contacts
 
@@ -7,32 +8,30 @@ urlpatterns = [
 
 #----------------------------auth-----------------------------------------
     path('login/', views.AddUser.as_view()),
-    path('verifyotp/', views.VerifyOtp.as_view() ),
+    path('verify-otp/', views.VerifyOtp.as_view() ),
     path('logout/', views.Logout.as_view()),
-    path('refresh/', views.RefreshTokenApi.as_view()),
+    path('refresh-token/', views.RefreshTokenApi.as_view()),#refreshsession
  
 #--------------------------privacy---------------------------------
     
-    path('privacy/', views.PrivacyGet.as_view()),
-    path('privacyUpdate/', views.PrivacyUpdate.as_view()),
+    path('privacy-settings/', views.PrivacySettings.as_view()), #getprivacy
     
 #-----------------contacts-----------------------------    
     # path('contactsync/', contacts.ContactSync.as_view()),
-    path('contactsync/', contacts.ContactSyncser.as_view()),
-    # path('contactUpdate/',contacts.ContactUpdate.as_view()),
-    path('contactUpdate/',contacts.ContactUpdate.as_view()),
-    path('contactlist/', contacts.GetContactList.as_view()),
-
+    path('contacts/', contacts.Contacts.as_view()),#contactsync
+    
 #-----------------users-----------------------------------
-    path('update/', views.Update.as_view()),
-    path('details/', views.UserDetail.as_view()),
-
+    path('profile/', views.UserProfile.as_view()), #updateuserdetails and get
+   
 #--------------------block --------------------------------
-    path('block/', contacts.BlockUser.as_view()),
-    path('blockDetails/', contacts.BlockDetails.as_view()),
+    # path('contacts/block/', contacts.BlockUser.as_view()), #blockuser
+    path('block/', contacts.BlockUser.as_view()), #getblockedlist
 
 #-------------------chatroom apis---------------------------
-    path('addgroup/', chatroom.AddGroup.as_view())
-    
-    # path('list', views.UserApi.as_view()),
-]
+    path('chat-room/', chatroom.AddGroup.as_view()), #createroom
+    path('admin/', chatroom.GiveAdminRights.as_view()), #to grant admin access
+    path('remove/', chatroom.RemoveMember.as_view()), #removefromgroup
+    path('leave/', chatroom.LeaveGroup.as_view()),
+    path('members/', chatroom.GroupMembersApi.as_view()),#add member in existing group
+   ]
+
