@@ -1,13 +1,15 @@
 from django.shortcuts import render
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from .models import User, Session, ContactList, Privacy
-from .serializers import UserSerializer, RegisteSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, SessionSerializer
+from .models import User,UserStatus, Session, ContactList, Privacy,UsersMapping
+from .serializers import UserSerializer, UserstatuswithprofileSerializer,UserStatusSerializer, RegisterSerializer,UsersMappingSerializer, LoginSerializer, ContactListSerializer, PrivacySerializer, SessionSerializer
+from .serializers import UserProfileSerializer, Userstatusprofileserializer
 import json
 from rest_framework import status
-from utils.helpers import json_response, get_tokens_for_user, get_user_id_from_tokens, ApiKey, api_key_authorization,token_authorization
+from utils.helpers import json_response,error_response, get_tokens_for_user, get_user_id_from_tokens, serializer_error_format,ApiKey, api_key_authorization,token_authorization
 
-
+from phonenumber_field.modelfields import PhoneNumberField
+import traceback
 from decouple import config
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -16,81 +18,160 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 # Create your views here.
 from rest_framework.views import APIView
+import datetime
+from common.constants  import Constants, ErrMsgCode, ErrMsg
 
-
+from phonenumber_field.modelfields import PhoneNumberField
+import re
+import logging
+logger_error = logging.getLogger('error_logger')
+logger_info = logging.getLogger('info_logger')
 class AddUser(APIView):
     '''
-    Api user does not exits first register(with default privacy settings)
+    Api user does not exits first register(with default user status)  add a entry in usermapping table 
     '''
     permission_classes = [ApiKey]
     
     def post(self,request):
 
         try:
+            #payload data
             payload = request.data
-        
-            username = payload.get('username', None)
+            country_code = payload.get('country_code', None)
             phone_number = payload.get('phone_number', None)
-           
+            # print(phone_number)
             if phone_number is None:
-                return json_response(success = False, 
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='PHONE_NUMBER IS MISSING')
-        
+                return error_response(
+                    success=False,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    message= Constants.PHONE_NUMBER_MISSING,
+                    error_msg=ErrMsg.VALIDATION_ERROR,
+                    message_code=ErrMsgCode.VALIDATION_ERROR
+                )
+            if country_code is None:
+                return error_response(
+                    success=False,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    message= Constants.COUNTRY_CODE_MISSING,
+                    error_msg=ErrMsg.VALIDATION_ERROR,
+                    message_code=ErrMsgCode.VALIDATION_ERROR
+                )
+            phone_number_pattern = r'^\d{7,15}$'
+            country_code_pattern = r'^\+\d{1,3}$'
+            if  not re.match(phone_number_pattern, phone_number) or not re.match(country_code_pattern, country_code):
+                return error_response(
+                    success=False,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    message= Constants.INVALID_PHONE,
+                    error_msg=ErrMsg.VALIDATION_ERROR,
+                    message_code=ErrMsgCode.VALIDATION_ERROR
+                )
+            #flag variable is used to know that wheather the user is created for the first time or already present
             flag = 0
+            #to check whether the row has been created for rhe usermapping table for corresponding user
+            usermapping_flag = 0
+            
             user_data = {
-                    'username' : username,
                     'phone_number': phone_number,
-                    'profile_picture': payload.get('profile_picture', None),
-                    'status_quotes' : payload.get('status_quotes', None),
-                }
-            serializer_register = RegisteSerializer(data=user_data)
-            try:
-                user_obj = User.objects.get(phone_number=phone_number)
-
-            except User.DoesNotExist:
-                if serializer_register.is_valid():
-                    # print(1,"kkkk")
+                    'country_code': country_code
+                    }
+            
+            serializer_register = None
+            
+            user_obj = User.objects.filter(phone_number = phone_number, country_code = country_code)
+            
+            if len(user_obj) == 0:
+                #for the first time user register it in the user table
+                serializer_register = UserSerializer(data=user_data)
+                try:
+                    serializer_register.is_valid()
                     flag = 1
                     serializer_register.save()
-                else:
-                    json_response(success=False,
+                except :
+                    return error_response(success=False,
                                 status_code=status.HTTP_400_BAD_REQUEST, 
-                                message='NOT_REGISTERED', 
-                                error=serializer_register.errors)
-            
-            user_obj = User.objects.get(phone_number=phone_number)
-            serialzed_data = RegisteSerializer(user_obj)
-
+                                message= serializer_error_format(serializer_register.errors), 
+                                error_msg= serializer_error_format(serializer_register.errors),
+                                message_code= ErrMsgCode.VALIDATION_ERROR
+                                 )
+            try:
+                user_obj = User.objects.get(phone_number=phone_number)
+            except User.DoesNotExist:
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USER_NOT_FOUND,
+                                      message=Constants.USER_NOT_FOUND,
+                                      message_code= ErrMsgCode.USER_NOT_FOUND)
+            serialzed_data = UserSerializer(user_obj)
+            #for first time user we create the row for usermapping table - if  flag = 1
             if flag:
-                privacy_data = { "user_id": user_obj.id }
-                serializer_privacy = PrivacySerializer(data=privacy_data)
-
-                if serializer_privacy.is_valid():
-                    # print("privacy")
-                    serializer_privacy.save()
-                else:
-                    json_response(success=False,
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                message='Privacy is not set', 
-                                error= serializer_privacy.errors)
-           
+                usersmapping_data = { "app_user_id":  user_obj.user_id}
+                serializer_usermapping = UsersMappingSerializer(data = usersmapping_data)
+                try: 
+                    serializer_usermapping.is_valid()
+                    #creating the row in usersmapping table so usermapping_flag helps to know
+                    usermapping_flag = 1
+                    # print('user_mapping',usermapping_flag)
+                    serializer_usermapping.save()
+                except:
+                    print(serializer_usermapping.errors)
+                    return error_response(success=False,
+                                         status_code=status.HTTP_400_BAD_REQUEST,
+                                         message= Constants.USER_MAPPING_NOT_CREATED,
+                                         message_code=ErrMsgCode.VALIDATION_ERROR,
+                                         error_msg= serializer_error_format(serializer_usermapping.errors)
+                                         )
+                try:
+                    usermapping_obj = UsersMapping.objects.get(app_user_id = user_obj.user_id)
+                except:
+                    return error_response(success=False,
+                                          status_code=status.HTTP_400_BAD_REQUEST,
+                                          message=Constants.USERMAPPING_NOT_FOUND,
+                                          error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                          message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                          )
+                if usermapping_flag:
+                    # creating the row for user_status for the first time user
+                    user_status_data = {
+                        "chat_user_id": usermapping_obj.chat_user_id,
+                        "timestamp": datetime.datetime.now()
+                        }
+                    serializer_userstatus = UserStatusSerializer(data = user_status_data)
+                    try:
+                        serializer_userstatus.is_valid()
+                        serializer_userstatus.save()
+                    except:
+                        # print(serializer_userstatus.errors)
+                        return error_response(success=False,
+                                             status_code=status.HTTP_400_BAD_REQUEST,
+                                             message=Constants.USER_STATUS_NOT_CREATED,
+                                             error_msg=serializer_error_format(serializer_userstatus.errors),
+                                             message_code=ErrMsgCode.VALIDATION_ERROR
+                                            )
             
             return json_response(success=True, 
-                                status_code=status.HTTP_201_CREATED, 
-                                message='CREATED',
+                                status_code=status.HTTP_200_OK, 
+                                message= Constants.OTP_SENT_SUCCESSFULLY,
                                 result= serialzed_data.data)
         
         except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    message = 'INTERNAL_SERVER_ERROR',
-                                    result = {},
-                                    error = str(err))
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
         
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
+                                    result = {},
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
+        
+
 class VerifyOtp(APIView):
     '''
-    api for creating the session of the user
+    api for creating the session of the user via verifying bypass otp
     '''
     permission_classes = [ApiKey]
     def post(self,request):
@@ -99,278 +180,418 @@ class VerifyOtp(APIView):
             device_id = payload.get('device_id',None)
             device_token = payload.get('device_token', None)
             device_type = payload.get('device_type', None)
-            otp = payload.get('otp', config('OTP'))
-            id = payload.get('id', None)
-
-            if id is None or device_id is None or device_token is None or device_type is None:
-                return json_response(success = False, 
+            otp = payload.get('otp', None)
+            country_code = payload.get('country_code', None)
+            phone_number = payload.get('phone_number', None)
+            #checking payload
+            if phone_number is None or device_id is None or device_token is None or device_type is None or otp is None or country_code is None:
+                return error_response(success = False, 
                                     status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='PROVIDE_DETAILS')
+                                    message= Constants.PAYLOAD_MISSING,
+                                    message_code=ErrMsgCode.VALIDATION_ERROR,
+                                    error_msg= ErrMsg.VALIDATION_ERROR)
             
-            user_obj = User.objects.get(id = id)
+            phone_number_pattern = r'^\d{7,15}$'
+            country_code_pattern = r'^\+\d{1,3}$'
+            if not re.match(phone_number_pattern, phone_number) or not re.match(country_code_pattern, country_code):
+                return error_response(
+                    success=False,
+                    message= Constants.INVALID_PHONE,
+                    error_msg=ErrMsg.VALIDATION_ERROR,
+                    message_code=ErrMsgCode.VALIDATION_ERROR
+                )
+            # user_obj = None
+            try:
+                user_obj = User.objects.get(phone_number=phone_number, country_code= country_code)
+            except:
+                return error_response(success=False,
+                                     status_code=status.HTTP_404_NOT_FOUND,
+                                     message=Constants.USER_NOT_FOUND,
+                                     error_msg=ErrMsg.USER_NOT_FOUND,
+                                     message_code=ErrMsgCode.USER_NOT_FOUND
+                                    )
+            # print('user_obj',user_obj)
+            if otp != config('OTP'):
+                return error_response(success = False,
+                                     status_code = status.HTTP_400_BAD_REQUEST,
+                                     message= Constants.WRONG_OTP,
+                                     message_code= ErrMsgCode.WRONG_OTP,
+                                     error_msg=ErrMsg.WRONG_OTP
+                                
+                                     )
+            #creating token for user_obj
             token = get_tokens_for_user(user_obj)
-            
+            try:
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_obj)
+            except:
+                return error_response(success=False,
+                                        status_code=status.HTTP_400_BAD_REQUEST,
+                                        message=Constants.USERMAPPING_NOT_FOUND,
+                                        error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                        message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                        )
             session_data = {
-                'user_id': id,
+                'chat_user_id': usermapping_obj.chat_user_id,
                 'device_id':  device_id, 
                 'device_token': device_token, 
                 'device_type':   device_type,
-                'jwt_token': token['refresh']
+                'jwt_token': token['refresh_token'],
+                'deleted_at': None,
             }
             try:
-                # session_obj = Session.objects.get(user_id = user_obj.id, device_id = device_id)
+                #if device_id already exists in session 
                 session_obj = Session.objects.get( device_id = device_id)
                 
                 serializer_session = SessionSerializer(instance=session_obj,data=session_data,partial=True)
-                if serializer_session.is_valid():
-                    # print('ii')
+                try: 
+                    serializer_session.is_valid()
                     serializer_session.save()
-                else:
-                    json_response(success=False, 
+                except:
+                    return error_response(success=False, 
                                     status_code=status.HTTP_400_BAD_REQUEST, 
-                                    message='Session not updated', 
-                                    error= serializer_session.errors)
+                                    message= serializer_error_format(serializer_session.errors) , 
+                                    message_code= ErrMsgCode.VALIDATION_ERROR,
+                                    error_msg= ErrMsg.VALIDATION_ERROR
+                                    )
 
             except Session.DoesNotExist:
-                # serializer_login = LoginSerializer(data=session_data)
+                #if session does not exist then create one
+            
                 serializer_session = SessionSerializer(data=session_data)
-                if serializer_session.is_valid():
-                    print("ff")
+                try: 
+                    serializer_session.is_valid()
                     serializer_session.save()
-                else:
-                    json_response(success=False,
-                                 status_code=status.HTTP_400_BAD_REQUEST, 
-                                 message='Session not created', error= serializer_session.errors)
-                    
+                except:
+                    return error_response(success=False, 
+                                    status_code=status.HTTP_400_BAD_REQUEST, 
+                                    message= serializer_error_format(serializer_session.errors) , 
+                                    message_code= ErrMsgCode.VALIDATION_ERROR,
+                                    error_msg= ErrMsg.VALIDATION_ERROR
+                                    )
+            user_details = UserProfileSerializer(user_obj).data
+            try:
+                user_status_obj = UserStatus.objects.get(chat_user_id = usermapping_obj )
+            except: 
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      message=Constants.USER_STATUS_NOT_FOUND,
+                                      error_msg=ErrMsg.USER_STATUS_NOT_FOUND,
+                                      message_code=ErrMsgCode.USER_STATUS_NOT_FOUND)
+            
+            user_details['status_quotes'] = user_status_obj.status_quotes
+            user_details['chat_user_id'] = usermapping_obj.chat_user_id
+            # logger_info.info('verify-otp api')
             return json_response(success=True,
-                                status_code=status.HTTP_201_CREATED,
-                                message='Session created',
-                                result={'sesion_details':serializer_session.data, 'token': token})
-
-        except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
-                                    result = {},
-                                    error = str(err))
-
-class Update(APIView):
-    # authentication_classes = [JWTAuthentication]
-    permission_classes = [ApiKey, IsAuthenticated]
-    def put(self, request):
-        try:
-            data = request.data
-            id = request.user.id
-            
-            user_obj = User.objects.get(id=id)
-
-            user_data = {
-                    'username' : data.get('username', None),
-                    'profile_picture': data.get('profile_picture', None),
-                    'status_quotes' : data.get('status_quotes', None),
-                    }
-            #user-active thing does not updated via profile update
-            serializer_user = RegisteSerializer(instance=user_obj,data=user_data, partial= True)
-            if serializer_user.is_valid():
-                serializer_user.save()
-            
-            return json_response(success=True, 
                                 status_code=status.HTTP_200_OK,
-                                message='UPDATED_SUCCESSFULLY',
-                                result=serializer_user.data )
+                                message=Constants.LOGIN_SUCCESSFULL,
+                                result= {
+                                    'user_details':user_details,
+                                    'token': token
+                                }
+                                )
+
         
         except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
                                     result = {},
-                                    error = str(err))
-class UserDetail(APIView):
-    '''
-    APi for getting particular user details
-    '''
-    permission_classes = [ApiKey, IsAuthenticated ]
-    
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
+
+class UserProfile(APIView):
+    '''APis for the getting the user profile and updating it'''
+    permission_classes = [ApiKey, IsAuthenticated]
     def get(self, request):
+        '''
+        APi for getting particular user details
+        '''
+        try:
+            user_obj = request.user
+            user_id = request.user.user_id
+            # usermapping_obj = None
+            try:
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
+            except:
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                      message=Constants.USERMAPPING_NOT_FOUND,
+                                      message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                      )
+            chat_user_id = usermapping_obj.chat_user_id
+            # userstatus_obj = None
+            try:
+                userstatus_obj = UserStatus.objects.get(chat_user_id = chat_user_id)
+            except UserStatus.DoesNotExist:
+                return error_response(success=False, 
+                                        status_code=status.HTTP_404_NOT_FOUND, 
+                                        message= Constants.USER_STATUS_NOT_FOUND, 
+                                        result={}, 
+                                        message_code= ErrMsgCode.USER_STATUS_NOT_FOUND,
+                                        error_msg= ErrMsg.USER_STATUS_NOT_FOUND
+                                        )
+            serializer_user = UserProfileSerializer(user_obj)
+            serializer_user_status = Userstatusprofileserializer(userstatus_obj)
+               
+            # if user_id is not None:
+            #     try:
+            #         # user_obj = User.objects.get(id=id)
+            #         # serializer = UserSerializer(user_obj)
+            #         # serializer = UserstatuswithprofileSerializer(userstatus_obj)
+            #         serializer_user_status = Userstatusprofileserializer(userstatus_obj)
+            #     except User.DoesNotExist:
+            #         return error_response(success=False, 
+            #                             status_code=status.HTTP_404_NOT_FOUND, 
+            #                             message= Constants.USER_NOT_FOUND, 
+            #                             result={}, 
+            #                             message_code= ErrMsgCode.USER_NOT_FOUND,
+            #                             error_msg= ErrMsg.USER_NOT_FOUND
+            #                             )
+            user_data = {
+            }
+            user_data.update(serializer_user.data )
+            user_data.update(serializer_user_status.data)
+            # logger_info.info('profile -get api')
+            return json_response(success=True, 
+                                status_code=status.HTTP_200_OK,
+                                message= Constants.USER_DETAILS,
+                                result = user_data)
+        except Exception as err:
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
+                                    result = {},
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
+        
+    def put(self, request):
+        '''
+        api to update user profile
+        '''
         try:
             payload = request.data
+            user_id = request.user.user_id
             user_obj = request.user
-            id = request.user.id
-            if id is not None:
-                try:
-                    # user_obj = User.objects.get(id=id)
-                    serializer =  UserSerializer(user_obj)
-                    return json_response(result=serializer.data)
-                except User.DoesNotExist:
-                    return json_response(success=False, 
+            # usermapping_obj = None
+            try:
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
+            except:
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                      message=Constants.USERMAPPING_NOT_FOUND,
+                                      message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                      )
+            chat_user_id = usermapping_obj.chat_user_id
+            # print(user_obj.profile_picture, "---")
+            user_data = {
+                "username": payload.get('username', user_obj.username),
+                "profile_picture": payload.get('profile_picture', user_obj.profile_picture)
+            }
+            try:
+                user_status_obj = UserStatus.objects.get(chat_user_id = chat_user_id)
+            except UserStatus.DoesNotExist:
+                return error_response(success=False, 
                                         status_code=status.HTTP_404_NOT_FOUND, 
-                                        message="User with the specified ID does not exist", 
-                                        result={}, error={})
+                                        message= Constants.USER_STATUS_NOT_FOUND, 
+                                        result={}, 
+                                        message_code= ErrMsgCode.USER_STATUS_NOT_FOUND,
+                                        error_msg= ErrMsg.USER_STATUS_NOT_FOUND
+                                        )
+            user_status_data = {
+                "status_quotes": payload.get('status_quotes', user_status_obj.status_quotes),
+            }
+            serializer_user = UserProfileSerializer(instance=user_obj,data= user_data, partial= True)
+            serializer_user_status = UserStatusSerializer(instance= user_status_obj, data = user_status_data, partial = True)
+            if serializer_user.is_valid():
+                serializer_user.save()
+            else:
+                return error_response(success=False,
+                                     status_code=status.HTTP_400_BAD_REQUEST,
+                                     message=Constants.UPDATE_UNSUCCESSFULL,
+                                     message_code=ErrMsgCode.VALIDATION_ERROR,
+                                     error_msg=serializer_error_format(serializer_user.errors)
+                                    )
+            if serializer_user_status.is_valid():
+                serializer_user_status.save()
+            else:
+                print(serializer_user_status.errors)
+                return error_response(success=False,
+                                     status_code=status.HTTP_400_BAD_REQUEST,
+                                     message=Constants.UPDATE_UNSUCCESSFULL,
+                                     message_code=ErrMsgCode.VALIDATION_ERROR,
+                                     error_msg=serializer_error_format(serializer_user.errors)
+                                    )
             
+            user_data = {}
+            user_data.update(serializer_user.data )
+            user_data.update(serializer_user_status.data)
+            # logger_info.info('profile -put api')
             return json_response(success=True, 
                                 status_code=status.HTTP_200_OK,
-                                message='',
-                                result = serializer.data)
-        except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                    message = 'INTERNAL_SERVER_ERROR',
-                                    result = {},
-                                    error = str(err))
-
-# class ContactSync(APIView):
-#     '''
-#     Api for contactSync
-#     '''
-#     permission_classes = [ApiKey, IsAuthenticated ]
-#     def post(self, request):
-#         try:
-#             user_id = request.user.id  # Get the user_id from the authentication token
-#             data = request.data
-#             contact_data = data.get('contacts',[])
-#             # print(contact_data)
-#             user_obj = request.user
-#             # # print(user_obj)
-#             # # Create a list of ContactList objects with user_id and contact_data
-#             contact_list_objects = []
-#             # contact_list_objects = [
-                
-#             #     {
-#             #         "user_id": user_id,
-#             #         "contact_name": item['contact_name'],
-#             #         "phone_number": item['phone_number']
-#             #     }
-#             #     for item in contact_data
-#             # ]
-#             for item in contact_data:
-#                 print(user_id)
-#                 dict = {
-#                     "user_id": user_id,
-#                     "contact_name": item.get('contact_name'),
-#                     "phone_number": item.get('phone_number')
-#                 }
-#                 print(dict)
-#                 contact_list_objects.append(dict)
-
-#             print((contact_list_objects))
-            
-#             serializer = ContactListSerializer(data=contact_list_objects, many=True)
-#             # print(serializer.errors)
-#             if serializer.is_valid():
-#                 print("ff")
-#                 serializer.save()
+                                message= Constants.PROFILE_UPDATE,
+                                # result=data 
+                                )
         
-#             return json_response(success=True, status_code=status.HTTP_201_CREATED,message='')
-#         except Exception as err:
-#             return json_response(success = False,
-#                                     status_code = status.HTTP_400_BAD_REQUEST,
-#                                     message = 'SOMETHING_WENT_WRONG',
-#                                     result = {},
-#                                     error = str(err))
-class PrivacyGet(APIView):
+        except Exception as err:
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
+                                    result = {},
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
+  
+class PrivacySettings(APIView):
     '''
-        Api for getting the privacy settings of particular user
+    Apis for getting privacy settings details and updating privacy settings details
     '''
     permission_classes = [ApiKey, IsAuthenticated ]
     def get(self, request):
+        '''
+        Api for getting the privacy settings of particular user
+        '''
         try:
-            user_id = request.user.id
+            user_id = request.user.user_id
+            # usermapping_obj = None
             try:
-                privacy_obj = Privacy.objects.get(user_id=user_id)
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
             except:
-                return json_response(success=False, 
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                      message=Constants.USERMAPPING_NOT_FOUND,
+                                      message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                      )
+            chat_user_id = usermapping_obj.chat_user_id
+            # print('chat____',chat_user_id)
+            # serializer = None
+            # privacy_obj = None
+            try:
+                privacy_obj = Privacy.objects.get(chat_user_id = chat_user_id )
+               
+            except Privacy.DoesNotExist:
+               
+                privacy_data = {"chat_user_id": chat_user_id}
+                serializer = PrivacySerializer(data = privacy_data)
+                try:
+                    serializer.is_valid()
+                  
+                    serializer.save()
+                    logger_info.info('privacy-settings - get api')
+                    return json_response(success=True,
+                                         status_code=status.HTTP_200_OK,
+                                         result=serializer.data,
+                                         message=Constants.DETAILS
+                                         )
+                except:
+                    return error_response(success=False, 
                                     status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Privacy setting for that user not found')
-            
+                                    message= Constants.CREATE_UNSUCCESFFULL,
+                                    message_code=ErrMsgCode.VALIDATION_ERROR,
+                                    error_msg= serializer_error_format(serializer.errors)
+                                    )
             serializer =  PrivacySerializer(privacy_obj)
-            return json_response(success=True, 
-                                status_code=status.HTTP_200_OK,
-                                message='Privacy setting',
-                                result = serializer.data)
+            logger_info.info('privacy-settings - get api')
+            return json_response(success=True,
+                                         status_code=status.HTTP_200_OK,
+                                         result=serializer.data,
+                                         message=Constants.DETAILS)
         
         except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
                                     result = {},
-                                    error = str(err))
-
-class PrivacyUpdate(APIView):
-    '''
-        Api for updating the privacy settings of particular user
-    '''
-    permission_classes = [ApiKey, IsAuthenticated ]
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
     def put(self, request):
-        
+        '''
+        Api for updating the privacy settings of particular user
+        '''
         try:
-            data = request.data
-            user_id = request.user.id
+            payload = request.data
+            user_id = request.user.user_id
+            # usermapping_obj = None
             try:
-                privacy_obj = Privacy.objects.get(user_id=user_id)
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
             except:
-                return json_response(success=False,
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Privacy setting for that user not found')
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                      message=Constants.USERMAPPING_NOT_FOUND,
+                                      message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                      )
+            chat_user_id = usermapping_obj.chat_user_id
+            try:
+                privacy_obj = Privacy.objects.get(chat_user_id = chat_user_id)
+            except:
+                return error_response(success=False,
+                                    status_code=status.HTTP_404_NOT_FOUND,
+                                    message=Constants.UPDATE_UNSUCCESSFULL,
+                                    message_code=ErrMsgCode.USER_NOT_FOUND,
+                                    error_msg= ErrMsg.USER_NOT_FOUND)
            
-            serializer = PrivacySerializer(instance=privacy_obj,data=data,partial=True)
-            if serializer.is_valid():
-                serializer.save()
-            else:
-                return json_response(success=False, 
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Privacy setting not updated', 
-                                    error=serializer.errors)
-            return json_response(status_code=status.HTTP_200_OK,message='Privacy setting  updated', result=serializer.data)
-            
-        except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
-                                    result = {},
-                                    error = str(err))
-class Logout(APIView):
-    '''
-        Api for Logout collect user_id, device_id and remove that particular session
-    '''
-    permission_classes = [ApiKey, IsAuthenticated]
-    def post(self, request):
-        
-        try:
-            data = request.data
-            user_id = request.user.id
-            
-            device_id = data.get('device_id', None)
-            if device_id is None:
-                return json_response(success=False, 
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Provide the device_id')
+            serializer = PrivacySerializer(instance=privacy_obj,data= payload,partial=True)
             try:
-                session_obj = Session.objects.get(user_id = user_id, device_id = device_id)
-                session_obj.delete()
+                serializer.is_valid()
+                serializer.save()
             except:
-                return json_response(success=False, 
+                return error_response(success=False, 
                                     status_code=status.HTTP_400_BAD_REQUEST,
-                                    message='Session does not exist')
+                                    message= serializer_error_format(serializer.errors), 
+                                    error_msg= ErrMsg.VALIDATION_ERROR,
+                                    message_code= ErrMsgCode.VALIDATION_ERROR
+                                    )
+            logger_info.info('privacy-getting -- put api')
+            return json_response(status_code=status.HTTP_200_OK,
+                                 message= Constants.PRIVACY_UPDATE, 
+                                #  result=serializer.data
+                                 )
             
-            
-            refresh_token = session_obj.jwt_token
-            print(refresh_token)
-            # token = RefreshToken(base64_encoded_token_string)
-            RefreshToken(refresh_token).blacklist()
-
-            # RefreshToken(refresh_token).blacklist()
-            return json_response(status_code=status.HTTP_200_OK,message='LOGOUT SUCCESSFULLY')
-        
         except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
                                     result = {},
-                                    error = str(err))
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
+
+
 
 class RefreshTokenApi(APIView):
     '''
-        Api collection for creating a new access token
+        Api collection for creating a new access token,refresh token
         using the refresh token
     '''
     permission_classes = [ApiKey, IsAuthenticated]
@@ -380,60 +601,123 @@ class RefreshTokenApi(APIView):
         '''
         try:
         
-            data = request.data
-            refresh_token = data.get("refresh", None)
+            payload = request.data
+            refresh_token = payload.get("refresh_token", None)
            
             if refresh_token is None:
-                return json_response(success = False,
-                                         status_code = status.HTTP_400_BAD_REQUEST,
-                                         message = "Provide refresh token.",
-                                         result = {},
-                                        )
-            refresh_token_object = RefreshToken(refresh_token)
+                return error_response(success=False,
+                                      message= Constants.INVALID_TOKEN,
+                                      status_code= status.HTTP_401_UNAUTHORIZED,
+                                      error_msg= ErrMsg.INVALID_TOKEN,
+                                      message_code=ErrMsgCode.INVALID_TOKEN            
+                )
+            try:
+                refresh_token_object = RefreshToken(refresh_token)
+            except Exception as err:
+                return error_response(success=False,
+                                      message= str(err),
+                                      status_code= status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.TOKEN_BLACLISTED,
+                                      message_code=ErrMsgCode.TOKEN_BLACLISTED,          
+                )
             access_token = refresh_token_object.access_token
+            logger_info.info('refresh session')
             return json_response(success = True,
                                      status_code = status.HTTP_200_OK,
-                                     message = "New access token provided.",
-                                     result = {"refresh": str(refresh_token),
-                                               "access": str(access_token)},
+                                     message = Constants.TOKEN_REFRESHED_SUCESSFULL,
+                                     result = {
+                                            "access_token": str(access_token)},
                                      )
         
         except Exception as err:
-            return json_response(success = False,
-                                    status_code = status.HTTP_400_BAD_REQUEST,
-                                    message = 'SOMETHING_WENT_WRONG',
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
                                     result = {},
-                                    error = str(err))
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )
 
 
 
 
+class Logout(APIView):
+    '''
+        Api for Logout collect user_id, device_id and remove that particular session
+    '''
+    permission_classes = [ApiKey, IsAuthenticated]
+    def post(self, request):
+        
+        try:
+            payload = request.data
+            # user_obj = request.user
+            user_id = request.user.user_id
+            usermapping_obj = None
+            try:
+                usermapping_obj = UsersMapping.objects.get(app_user_id = user_id)
+            except:
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.USERMAPPING_NOT_FOUND,
+                                      message=Constants.USERMAPPING_NOT_FOUND,
+                                      message_code=ErrMsgCode.USERMAPPING_NOT_FOUND
+                                      )
+            chat_user_id = usermapping_obj.chat_user_id
+            # logout = payload.get()
+            # device_id = payload.get('device_id', None)
+            refresh_token = payload.get('refresh_token', None)
+            if refresh_token is None:
+                return error_response(success=False, 
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    message=Constants.PAYLOAD_MISSING,
+                                    error_msg=ErrMsg.REFRESH_TOKEN_MISSING,
+                                    message_code=ErrMsgCode.PAYLOAD_MISSING
+                                    )
+            try:
+                session_obj = Session.objects.get(chat_user_id = chat_user_id, jwt_token = refresh_token)
+                # session_obj.delete()
+                # session_obj = Session.objects.get(j = refresh_token)
+                
+                session_obj.deleted_at = datetime.datetime.now()
+                session_obj.save()
+            except:
+                return error_response(success=False, 
+                                    status_code=status.HTTP_400_BAD_REQUEST,
+                                    message= Constants.SESSION_NOT_FOUND,
+                                    message_code= ErrMsgCode.SESSION_NOT_FOUND,
+                                    error_msg=ErrMsg.SESSION_NOT_FOUND
+                                    )
+            
+            # refresh_token = session_obj.jwt_token
+            try:
+                RefreshToken(refresh_token).blacklist()
+            except Exception as err:
+                return error_response(success=False,
+                                      status_code=status.HTTP_400_BAD_REQUEST,
+                                      error_msg=ErrMsg.TOKEN_BLACLISTED,
+                                      message_code=ErrMsgCode.TOKEN_BLACLISTED,
+                                      message=str(err)
+                                      )
 
-
-
-
-
-
-
-
-# class Register(GenericAPIView):
-#     def post(self,request):
-#         try:
-#             data = (request.data)
-#             username = data.get('username', None)
-#             phone_number = data.get('phone_number', None)
-#             profile_picture = data.get('profile_picture', None)
-#             user_status = data.get('user_status', None)
-#             status_quotes = data.get('status_quotes', None)
-#             if(phone_number is None):
-#                 return json_response(success = True, status_code=status.HTTP_400_BAD_REQUEST,message='PHONE_NUMBER IS MISSING')
-#             serializer = RegisteSerializer(data=data)
-#             # print(serializer.is_valid(),serializer.errors,phone_number)
-#             user_obj = User.objects.get(phone_number=phone_number)
-#             if user_obj:
-#                 return json_response(success=False, status_code=status.HTTP_400_BAD_REQUEST, message='ALready registered' )
-#             if serializer.is_valid():
-#                 serializer.save()
-#             return json_response(success=True, status_code=status.HTTP_201_CREATED, message='',result = serializer.data)
-#         except json.JSONDecodeError:
-#             return json_response(success=False, status_code=status.HTTP_400_BAD_REQUEST, message='Invalid JSON data')
+            # RefreshToken(refresh_token).blacklist()
+            logger_info.info('logout api')
+            return json_response(status_code=status.HTTP_200_OK,message= Constants.LOGOUT)
+        
+        except Exception as err:
+            logger_error.error(err, exc_info=True)
+            print("----------------------------------------------------")
+            traceback.print_exc()
+            print("----------------------------------------------------")
+        
+            return error_response(success = False,
+                                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                    message = Constants.INTERNAL_SERVER_ERROR,
+                                    result = {},
+                                    message_code=ErrMsgCode.INTERNAL_SERVER_ERROR,
+                                    error_msg= str(err)
+                                    )

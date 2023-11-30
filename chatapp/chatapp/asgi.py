@@ -9,15 +9,15 @@ https://docs.djangoproject.com/en/4.2/howto/deployment/asgi/
 
 import os
 
-from channels.routing import ProtocolTypeRouter, URLRouter
-import users.routing
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'gs1.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'chatapp.settings')
 
-application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
-    "websocket": URLRouter(
-        users.routing.websocket_urlpatterns
-    )
-})
+application = get_asgi_application()
+
+# its important to make all other imports below this comment
+import socketio
+from chatting.sockets import sio
+
+
+application = socketio.ASGIApp(sio, application)
